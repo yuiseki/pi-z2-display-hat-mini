@@ -32,6 +32,8 @@ from PIL import Image, ImageDraw, ImageFont
 from displayhatmini import DisplayHATMini
 from xkbcommon import xkb
 
+from screensaver import Screensaver
+
 WIDTH, HEIGHT = 320, 240
 BG = (0, 0, 0)
 DEFAULT_FG = (0, 255, 0)
@@ -198,6 +200,8 @@ def main():
     dirty = False
     last_render = 0.0
     last_kbd_try = 0.0
+    # キー入力のみを活動とみなす (画面出力 = htop/tail -f 等は活動に含めない)
+    saver = Screensaver(display, on_wake=render)
     while True:
         # キーボード未取得なら 1秒ごとに再取得を試みる (USB/BT ホットプラグ)
         if kbd is None and (time.time() - last_kbd_try) >= 1.0:
@@ -208,7 +212,7 @@ def main():
 
         fds = [master_fd] + ([kbd.fd] if kbd else [])
         try:
-            r, _, _ = select.select(fds, [], [], 0.1)
+            r, _, _ = select.select(fds, [], [], 0.05 if not saver.awake else 0.1)
         except (InterruptedError, OSError):
             # kbd.fd が無効化(切断)された可能性
             if kbd is not None:
@@ -229,9 +233,21 @@ def main():
             dirty = True
         if kbd is not None and kbd.fd in r:
             try:
+                woke = False
                 for ev in kbd.read():
-                    if ev.type == ecodes.EV_KEY:
-                        handle_key(ev.code, ev.value)
+                    if ev.type != ecodes.EV_KEY:
+                        continue
+                    if not saver.awake:
+                        # スクリーンセーバー/消灯中: 入力は復帰のみに使い PTY へ送らない
+                        if ev.value in (1, 2):
+                            saver.note_activity()
+                            woke = True
+                        continue
+                    if woke:
+                        continue  # 復帰させたバッチの残りキーも消費する
+                    if ev.value in (1, 2):
+                        saver.note_activity()  # キー入力 = 活動
+                    handle_key(ev.code, ev.value)
             except BlockingIOError:
                 pass
             except OSError:
@@ -241,8 +257,9 @@ def main():
                 except Exception:
                     pass
                 kbd = None
+        saver.tick()  # アイドル判定 (5分でDVDロゴ, 15分で消灯) / ロゴ更新
         now = time.time()
-        if dirty and (now - last_render) >= 0.04:
+        if saver.awake and dirty and (now - last_render) >= 0.04:
             render()
             dirty = False
             last_render = now

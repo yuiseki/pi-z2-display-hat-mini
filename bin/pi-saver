@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# pi-screensaver の別名。
+exec pi-screensaver "$@"

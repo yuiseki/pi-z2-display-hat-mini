@@ -10,9 +10,11 @@ VENV="$HOME/.venvs/displayhatmini"
 echo "== Python 依存を導入 =="
 "$VENV/bin/pip" install --quiet -r "$DEST/requirements.txt"
 
-echo "== pi-map / pi-maps を /usr/local/bin へ =="
+echo "== pi-map / pi-maps / pi-screensaver / pi-saver を /usr/local/bin へ =="
 sudo install -m 0755 "$DEST/bin/pi-map" /usr/local/bin/pi-map
 sudo install -m 0755 "$DEST/bin/pi-maps" /usr/local/bin/pi-maps
+sudo install -m 0755 "$DEST/bin/pi-screensaver" /usr/local/bin/pi-screensaver
+sudo install -m 0755 "$DEST/bin/pi-saver" /usr/local/bin/pi-saver
 
 echo "== systemd サービスを導入・有効化 =="
 sudo install -m 0644 "$DEST/systemd/pi-display.service" /etc/systemd/system/pi-display.service

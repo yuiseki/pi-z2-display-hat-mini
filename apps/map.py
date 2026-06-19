@@ -26,6 +26,8 @@ from evdev import InputDevice, ecodes
 from PIL import Image, ImageDraw, ImageFont
 from displayhatmini import DisplayHATMini
 
+from screensaver import Screensaver
+
 # スーパバイザへの切替要求チャネル
 REQUEST = "/tmp/pi-display/request"
 CTRLC_WINDOW = 1.5  # Ctrl+C を連続2回とみなす最大間隔(秒)
@@ -162,7 +164,7 @@ def keyboard_present():
 
 def poll_keyboard():
     """KBの再取得(ホットプラグ)と Ctrl+C 検出。
-    戻り値: "exit"(連続2回) / "first"(1回目) / None。"""
+    戻り値: "exit"(連続2回) / "first"(1回目) / "key"(その他のキー入力=活動) / None。"""
     if time.time() - _kbd["t"] > 1.0:
         _kbd["t"] = time.time()
         if _kbd["dev"] is None:
@@ -171,11 +173,14 @@ def poll_keyboard():
     if dev is None:
         return None
     result = None
+    saw_key = False
     try:
         if select.select([dev.fd], [], [], 0)[0]:
             for ev in dev.read():
                 if ev.type != ecodes.EV_KEY:
                     continue
+                if ev.value == 1:
+                    saw_key = True  # スクリーンセーバー復帰判定用 (どのキーでも活動)
                 if ev.code in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
                     _kbd["ctrl"] = ev.value != 0
                 elif ev.code == ecodes.KEY_C and ev.value == 1 and _kbd["ctrl"]:
@@ -185,7 +190,7 @@ def poll_keyboard():
                     result = "exit" if len(_kbd["cc"]) >= 2 else "first"
     except (BlockingIOError, OSError):
         _kbd["dev"] = None  # 切断 → 次回再取得
-    return result
+    return result or ("key" if saw_key else None)
 
 
 # ---- 電源状態 (PiSugar): 給電中のみ貪欲プリレンダ ----
@@ -397,9 +402,27 @@ def main():
     last_pw = power_plugged()
     last_pct = _power["pct"]
     last_kbd = keyboard_present()
+    saver = Screensaver(display, on_wake=display_current)
     while True:
-        # KB あり時のみ: A+X 同時押し / Ctrl+C でターミナルへ切替
         kev = poll_keyboard()
+        pressed = any_pressed()
+
+        # --- スクリーンセーバー/消灯中: 入力で復帰、なければロゴを進める ---
+        if not saver.awake:
+            if pressed or kev is not None:
+                saver.note_activity()       # 通常画面へ復帰 (on_wake=display_current)
+                while any_pressed():         # 復帰させた入力は消費 (移動・切替に使わない)
+                    time.sleep(0.02)
+            else:
+                saver.tick()                 # DVD ロゴを 1 フレーム進める / 消灯維持
+                time.sleep(0.03)
+            continue
+
+        # 操作があればアイドルタイマを更新
+        if pressed or kev is not None:
+            saver.note_activity()
+
+        # KB あり時のみ: A+X 同時押し / Ctrl+C でターミナルへ切替
         if keyboard_present():
             if is_pressed("A") and is_pressed("X"):
                 switch_to_terminal()
@@ -435,13 +458,15 @@ def main():
             last_pw = plugged
             last_pct = _power["pct"]
             display_current()
-        # 給電中は貪欲、バッテリー駆動中は最小限の先読み
+        # 給電中は貪欲、バッテリー駆動中は最小限の先読み (awake 時のみ)
         gen = prerender_targets() if plugged else minimal_targets()
         nxt = next((t for t in gen if not is_cached(*t)), None)
         if nxt:
             render_tile(*nxt, background=True)
         else:
             time.sleep(0.2)  # 周辺すべて温まったら省エネ待機
+        # ループ末尾でアイドル判定 (5分でスクリーンセーバー, 15分で消灯)
+        saver.tick()
 
 
 if __name__ == "__main__":
