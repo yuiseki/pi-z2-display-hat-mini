@@ -1,0 +1,17 @@
+[Unit]
+Description=pi-z2 Display HAT Mini supervisor (map / terminal auto switch)
+After=multi-user.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yuiseki
+SupplementaryGroups=spi gpio i2c input video render
+Environment=HOME=/home/yuiseki
+WorkingDirectory=/home/yuiseki/pi-z2-display-hat-mini
+ExecStart=/home/yuiseki/.venvs/displayhatmini/bin/python -u /home/yuiseki/pi-z2-display-hat-mini/supervisor.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

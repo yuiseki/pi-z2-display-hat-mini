@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# pi-map の別名。
+exec pi-map "$@"

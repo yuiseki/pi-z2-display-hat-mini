@@ -1,0 +1,6 @@
+# Display HAT Mini (ST7789) + 入力 + 端末エミュレーション
+displayhatmini
+Pillow
+pyte
+evdev
+xkbcommon

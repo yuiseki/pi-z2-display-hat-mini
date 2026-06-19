@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# ターミナルから地図モードへ切り替える。
+# スーパバイザが監視する要求ファイルに "map" を書くだけ。
+set -eu
+mkdir -p /tmp/pi-display
+printf 'map' > /tmp/pi-display/request
+echo "switching to map..."
