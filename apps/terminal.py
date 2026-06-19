@@ -36,14 +36,29 @@ from screensaver import Screensaver
 
 WIDTH, HEIGHT = 320, 240
 BG = (0, 0, 0)
-DEFAULT_FG = (0, 255, 0)
+# 色指定の無い文字 (コマンド入力・通常出力・プロンプトのリセット部) の色。
+# 普通のターミナルに合わせてソフトな白にする (純緑だと全体が緑すぎるため)。
+DEFAULT_FG = (220, 220, 220)
 
 ANSI = {
-    "black": (40, 40, 40), "red": (255, 90, 90), "green": (0, 255, 0),
+    "black": (40, 40, 40), "red": (255, 90, 90), "green": (90, 220, 110),
     "brown": (200, 180, 60), "yellow": (255, 220, 90), "blue": (110, 150, 255),
     "magenta": (220, 120, 220), "cyan": (120, 220, 220), "white": (230, 230, 230),
     "default": DEFAULT_FG,
 }
+
+
+def fg_color(name):
+    """pyte の前景色 (色名 / 6桁hex / "default") を RGB に変換する。"""
+    rgb = ANSI.get(name)
+    if rgb is not None:
+        return rgb
+    if isinstance(name, str) and len(name) == 6:
+        try:
+            return (int(name[0:2], 16), int(name[2:4], 16), int(name[4:6], 16))
+        except ValueError:
+            pass
+    return DEFAULT_FG
 
 
 def acquire_keyboard():
@@ -130,8 +145,11 @@ def main():
     if pid == 0:
         os.environ["TERM"] = "linux"
         os.environ["LANG"] = os.environ.get("LANG", "C.UTF-8")
-        os.environ["PS1"] = "$ "
-        os.execvp("bash", ["bash", "--norc", "-i"])
+        # ~/.bashrc を読み込みつつ、プロンプト表示名だけ差し替える rcfile を使う
+        # (色付きプロンプト / エイリアス / ls --color などは .bashrc 由来)。
+        rc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "term.bashrc")
+        os.chdir(os.path.expanduser("~"))  # 起動時の pwd をホーム (~) にする
+        os.execvp("bash", ["bash", "--rcfile", rc, "-i"])
         os._exit(1)
     winsize = struct.pack("HHHH", rows, cols, WIDTH, HEIGHT)
     fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
@@ -150,7 +168,7 @@ def main():
                 c = ch.data
                 if c and c != " ":
                     d.text((x * char_w, y * line_h), c, font=font,
-                           fill=ANSI.get(ch.fg, DEFAULT_FG))
+                           fill=fg_color(ch.fg))
         if not screen.cursor.hidden:
             cx = screen.cursor.x * char_w
             cy = screen.cursor.y * line_h
