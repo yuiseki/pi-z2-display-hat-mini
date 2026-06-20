@@ -2,15 +2,17 @@
 # スクリーンセーバーの挙動を手元で確認するための制御コマンド。
 # 実行中の map/terminal アプリが監視する制御ファイルにコマンドを書くだけ。
 #   pi-screensaver [on|saver]  -> 直ちにスクリーンセーバー (DVD ロゴ) を表示
+#   pi-screensaver tile        -> 直ちに跳ねる地図タイル段階へ
 #   pi-screensaver off         -> 直ちにディスプレイ消灯
 #   pi-screensaver wake        -> 通常表示へ復帰
 set -eu
 cmd="${1:-on}"
 case "$cmd" in
   on|saver) cmd="saver" ;;
+  tile)     cmd="tile" ;;
   off)      cmd="off" ;;
   wake)     cmd="wake" ;;
-  *) echo "usage: pi-screensaver [saver|off|wake]" >&2; exit 2 ;;
+  *) echo "usage: pi-screensaver [saver|tile|off|wake]" >&2; exit 2 ;;
 esac
 mkdir -p /tmp/pi-display
 printf '%s' "$cmd" > /tmp/pi-display/saver

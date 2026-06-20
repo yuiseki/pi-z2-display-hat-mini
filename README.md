@@ -14,16 +14,17 @@ Raspberry Pi Zero 2 W + Pimoroni Display HAT Mini を、キーボードの有無
 - ターミナル表示中にキーボード切断: 地図へ自動移行
 - キーボードはあとから接続しても上記の切替が有効になる
 - 5 分無操作: スクリーンセーバー (跳ね回る DVD ロゴ) を表示
-- 15 分無操作: ディスプレイ消灯 (バックライト off)。ボタン/キー入力で即復帰 (その入力は復帰のみに消費)
+- 10 分無操作: 跳ね回る地図タイル (広域・正方形。数枚をプリレンダしてキャッシュし、壁にぶつかる度に切替)
+- 消灯: バッテリー駆動は 30 分、給電中 (battery_power_plugged) は 12 時間。ボタン/キー入力で即復帰 (その入力は復帰のみに消費)
 
 ## 構成
 
 - `supervisor.py` : モード決定・子アプリの起動/停止/切替・ディスプレイ/キーボード監視 (systemd 常駐)
 - `apps/map.py` : 地図ビューア (maplibre-native + llvmpipe + PMTiles、タイルキャッシュ/プリレンダ、給電連動)
 - `apps/terminal.py` : ターミナル (PTY + bash + pyte + xkbcommon、USB/BT キーボード対応)
-- `apps/screensaver.py` : アイドル時の DVD ロゴ表示と消灯 (map/terminal 共有)
+- `apps/screensaver.py` : アイドル時の DVD ロゴ → 跳ねる地図タイル → 消灯 (map/terminal 共有)
 - `bin/pi-map`, `bin/pi-maps` : 地図モードへの切替要求コマンド
-- `bin/pi-screensaver`, `bin/pi-saver` : スクリーンセーバーの手動トリガ (`saver`/`off`/`wake`。動作確認用)
+- `bin/pi-screensaver`, `bin/pi-saver` : スクリーンセーバーの手動トリガ (`saver`/`tile`/`off`/`wake`。動作確認用)
 - `systemd/pi-display.service` : 起動時自動起動の unit
 - IPC: `/tmp/pi-display/request` (切替要求ファイル)
 
