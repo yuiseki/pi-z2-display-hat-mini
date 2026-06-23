@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Display HAT Mini の4ボタンで操作する地図ページャ (0.5タイル離散 + 強キャッシュ + プリレンダ)。
 
-- ナビは「ハーフタイル単位」の整数インデックス (x,y)。1ステップ = 0.5タイル
+- ナビは「クォータータイル単位」の整数インデックス (x,y)。1ステップ = 0.25タイル
 - 各ビューを mbgl-render で 512x512 描画し cache/{style-hash}/z/x/y.png に保存
-  (x,y はハーフタイルインデックス)
+  (x,y はクォータータイルインデックス)
 - キャッシュヒットは即表示。アイドル中は隣接(上下左右+ズーム±)をプリレンダ
 - ボタン:
     単押し : 左列(A/B)=←(x-1)  右列(X/Y)=→(x+1)   [0.5タイル]
@@ -28,6 +28,17 @@ from displayhatmini import DisplayHATMini
 
 from screensaver import Screensaver
 
+try:
+    from qwstpad import QwSTPad
+    _pad = QwSTPad()
+except Exception:
+    _pad = None
+
+_pad_last_action = {}   # ボタン名 -> 最後に処理した時刻 (レート制限)
+_pending_gamepad = []   # render_tile 中断時に検出した入力を保持するキュー
+PAD_MOVE_INTERVAL = 0.3   # 移動の最小間隔(秒)
+PAD_ZOOM_INTERVAL = 0.5   # ズームの最小間隔(秒)
+
 # スーパバイザへの切替要求チャネル
 REQUEST = "/tmp/pi-display/request"
 CTRLC_WINDOW = 1.5  # Ctrl+C を連続2回とみなす最大間隔(秒)
@@ -50,7 +61,7 @@ ENV = {
 ZMIN, ZMAX = 3, 16
 LONGPRESS = 0.6
 DOUBLE_WINDOW = 0.35
-PRERENDER_RADIUS = 4   # 現zoomで中心から先読みする半タイル半径(貪欲。±2タイル≈81枚)
+PRERENDER_RADIUS = 8   # 現zoomで中心から先読みするクォータータイル半径(貪欲。±2タイル=8ステップ≈320枚)
 PRERENDER_ZOOMS = (1, -1, 2, -2)  # 先読みする隣接ズーム差
 
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 12)
@@ -78,7 +89,7 @@ CACHE_DIR = os.path.join(TILE_CACHE, HASH)
 # ---- ハーフタイルインデックス(整数) <-> 緯度経度。1ステップ = 0.5タイル ----
 def view_center(z, hx, hy):
     n = 2 ** z
-    fx, fy = hx / 2.0, hy / 2.0  # 分数タイル座標(ビュー中心の点)
+    fx, fy = hx / 4.0, hy / 4.0  # 分数タイル座標(ビュー中心の点)
     lon = fx / n * 360.0 - 180.0
     lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * fy / n))))
     return lon, lat
@@ -89,11 +100,11 @@ def lonlat_to_half(z, lon, lat):
     lat = max(-85.05, min(85.05, lat))
     fx = (lon + 180.0) / 360.0 * n
     fy = (1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * n
-    return round(fx * 2), round(fy * 2)
+    return round(fx * 4), round(fy * 4)
 
 
 def half_extent(z):
-    return 2 * (2 ** z)  # x の周期 / y の最大
+    return 4 * (2 ** z)  # x の周期 / y の最大
 
 
 def tile_path(z, x, y):
@@ -111,6 +122,15 @@ def is_pressed(name):
 
 def any_pressed():
     return any(is_pressed(n) for n in BTN)
+
+
+def any_gamepad_pressed():
+    if _pad is None:
+        return False
+    try:
+        return any(_pad.read_buttons().values())
+    except Exception:
+        return False
 
 
 # ---- スーパバイザへの切替要求 / キーボード(A+X, Ctrl+C連続2回 → ターミナルへ) ----
@@ -244,7 +264,8 @@ def render_tile(z, x, y, background):
     i = 0
     while proc.poll() is None:
         if background:
-            if any_pressed():
+            if any_pressed() or any_gamepad_pressed():
+                _enqueue_gamepad_if_pressed()  # 入力をキューに保存してから中断
                 proc.kill()
                 try:
                     os.remove(path)
@@ -314,7 +335,7 @@ def display_current():
 
 
 def ring(cx, cy, d, m):
-    """中心(cx,cy)から Chebyshev 距離 d の半タイル枠を生成。"""
+    """中心(cx,cy)から Chebyshev 距離 d のクォータータイル枠を生成。"""
     for dx in range(-d, d + 1):
         for dy in range(-d, d + 1):
             if max(abs(dx), abs(dy)) != d:
@@ -395,6 +416,72 @@ def apply_gesture(name, g):
         cam["x"], cam["y"] = lonlat_to_half(cam["z"], lon, lat)
 
 
+def _enqueue_gamepad_if_pressed():
+    """現在押されているゲームパッドボタンを _pending_gamepad に追加する。
+    render_tile のバックグラウンドループから呼び出し、入力を中断後まで保持する。"""
+    if _pad is None:
+        return
+    try:
+        btns = _pad.read_buttons()
+        for name, state in btns.items():
+            if state and name not in _pending_gamepad:
+                _pending_gamepad.append(name)
+    except Exception:
+        pass
+
+
+def poll_gamepad():
+    """ゲームパッドの入力を返す。
+    pending キューに入力があればそれを優先して返し、なければライブ読取する。"""
+    if _pending_gamepad:
+        result = list(_pending_gamepad)
+        _pending_gamepad.clear()
+        return result
+    if _pad is None:
+        return []
+    try:
+        btns = _pad.read_buttons()
+    except Exception:
+        return []
+    return [name for name, state in btns.items() if state]
+
+
+def apply_gamepad(buttons):
+    """U/D/L/R で移動、+/-/X/Y でズーム。時間ベースのレート制限。LED フィードバックあり。"""
+    m = half_extent(cam["z"])
+    now = time.time()
+    acted = False
+    for name in buttons:
+        interval = PAD_ZOOM_INTERVAL if name in ("+", "-", "X", "Y") else PAD_MOVE_INTERVAL
+        if now - _pad_last_action.get(name, 0.0) < interval:
+            continue
+        _pad_last_action[name] = now
+        acted = True
+        if name == "L":
+            display.set_led(0.0, 1.0, 0.0)
+            cam["x"] = (cam["x"] - 1) % m
+        elif name == "R":
+            display.set_led(0.0, 1.0, 0.0)
+            cam["x"] = (cam["x"] + 1) % m
+        elif name == "U":
+            display.set_led(0.0, 1.0, 0.0)
+            cam["y"] = max(0, cam["y"] - 1)
+        elif name == "D":
+            display.set_led(0.0, 1.0, 0.0)
+            cam["y"] = min(m, cam["y"] + 1)
+        elif name in ("+", "X"):
+            display.set_led(1.0, 0.4, 0.0)
+            lon, lat = view_center(cam["z"], cam["x"], cam["y"])
+            cam["z"] = min(ZMAX, cam["z"] + 1)
+            cam["x"], cam["y"] = lonlat_to_half(cam["z"], lon, lat)
+        elif name in ("-", "Y"):
+            display.set_led(1.0, 0.4, 0.0)
+            lon, lat = view_center(cam["z"], cam["x"], cam["y"])
+            cam["z"] = max(ZMIN, cam["z"] - 1)
+            cam["x"], cam["y"] = lonlat_to_half(cam["z"], lon, lat)
+    return acted
+
+
 def main():
     print(f"map pager (cache={CACHE_DIR}, half-tile steps)")
     global ctrlc_hint_until
@@ -406,20 +493,24 @@ def main():
     while True:
         kev = poll_keyboard()
         pressed = any_pressed()
+        gpad = poll_gamepad()
+        gpad_pressed = len(gpad) > 0
 
         # --- スクリーンセーバー/消灯中: 入力で復帰、なければロゴを進める ---
         if not saver.awake:
-            if pressed or kev is not None:
+            if pressed or kev is not None or gpad_pressed:
                 saver.note_activity()       # 通常画面へ復帰 (on_wake=display_current)
                 while any_pressed():         # 復帰させた入力は消費 (移動・切替に使わない)
                     time.sleep(0.02)
+                # ゲームパッド入力も消費 (復帰トリガは移動に使わない)
+                poll_gamepad()
             else:
                 saver.tick()                 # DVD ロゴを 1 フレーム進める / 消灯維持
                 time.sleep(0.03)
             continue
 
         # 操作があればアイドルタイマを更新
-        if pressed or kev is not None:
+        if pressed or kev is not None or gpad_pressed:
             saver.note_activity()
 
         # KB あり時のみ: A+X 同時押し / Ctrl+C でターミナルへ切替
@@ -451,6 +542,12 @@ def main():
                 handled = True
                 break
         if handled:
+            continue
+        # ゲームパッド入力処理
+        if gpad_pressed:
+            if apply_gamepad(gpad):
+                display_current()
+                display.set_led(0.0, 0.0, 0.0)
             continue
         # 電源状態が変わったらアイドル中でも HUD を更新 (AC/BAT)
         plugged = power_plugged()
